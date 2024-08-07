@@ -1,0 +1,2 @@
+lr,hidden_features,hidden_layers,max_iters,original_mse,compression_ratio,transformed_mse,training_time,original_psnr,model
+0.001,256,4,2000,695.6107621946119,3.8504960811851583,0.011953095912001978,138.9186969871521,33.57205159625727,WIRE

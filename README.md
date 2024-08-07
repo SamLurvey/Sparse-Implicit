@@ -5,4 +5,4 @@ If you run them from testing.py make sure to define base_grid and model_grids in
 
 the data analysis folder contains several useful data analysis methods
 
-if making changes to the models using testing_runs, you might have to restart the kernel to make them take affect
+if making changes to the models using testing_runs, you might have to restart the kernel to make them take effect

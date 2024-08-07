@@ -13,7 +13,7 @@ def evaluate_model(model, original_data, transformed_data, max_iters, zero_fract
     start_time = time.time()
     
     # Train the model on transformed data
-    mse_transformed = model.train_sparse_epoch(transformed_data, total_steps=max_iters, zero_fraction=zero_fraction, refresh_interval=refresh_interval)
+    mse_transformed = model.train_sparse(transformed_data, total_steps=max_iters, zero_fraction=zero_fraction, refresh_interval=refresh_interval)
     
     training_time = time.time() - start_time
     
@@ -46,33 +46,36 @@ def evaluate_models(hyperparameters, original_samples, transformed_samples, file
     results = []
     
     for i, (original_data, transformed_data, file_name) in enumerate(zip(original_samples, transformed_samples, file_names)):
-        print(f"\nEvaluating on data sample {i+1}: {file_name}")
+        if i > 0:
+            break
+        for j in range(20):
+            print(f"\nEvaluating on data sample {i+1}: {file_name}")
         
-        for ModelClass in model_classes:
-            model = ModelClass(hyperparameters)
+            for ModelClass in model_classes:
+                model = ModelClass(hyperparameters)
             
-            print(f"\nEvaluating {ModelClass.__name__}")
-            print("Hyperparameters:")
-            for key, value in hyperparameters.items():
-                print(f"  {key}: {value}")
+                print(f"\nEvaluating {ModelClass.__name__}")
+                print("Hyperparameters:")
+                for key, value in hyperparameters.items():
+                    print(f"  {key}: {value}")
             
-            mse_original, mse_transformed, compression_ratio, training_time = evaluate_model(model, original_data, transformed_data, hyperparameters["max_iters"], hyperparameters["zero_fraction"], hyperparameters["refresh_interval"])
+                mse_original, mse_transformed, compression_ratio, training_time = evaluate_model(model, original_data, transformed_data, hyperparameters["max_iters"], hyperparameters["zero_fraction"], hyperparameters["refresh_interval"])
             
-            print(f"MSE (original scale): {mse_original}")
-            print(f"MSE (transformed scale): {mse_transformed}")
-            print(f"Compression Ratio: {compression_ratio}")
-            print(f"Training time: {training_time}")
+                print(f"MSE (original scale): {mse_original}")
+                print(f"MSE (transformed scale): {mse_transformed}")
+                print(f"Compression Ratio: {compression_ratio}")
+                print(f"Training time: {training_time}")
             
-            results.append({
-                'model': ModelClass.__name__,
-                'data_sample': i+1,
-                'file_name': file_name,
-                'original_mse': mse_original,
-                'compression_ratio': compression_ratio,
-                'transformed_mse': mse_transformed,
-                'training_time': training_time,
-                **hyperparameters
-            })
+                results.append({
+                    'model': ModelClass.__name__,
+                    'data_sample': i+1,
+                    'file_name': file_name,
+                    'original_mse': mse_original,
+                    'compression_ratio': compression_ratio,
+                    'transformed_mse': mse_transformed,
+                    'training_time': training_time,
+                    **hyperparameters
+                })
     
     return results
 
@@ -100,7 +103,7 @@ def hyperparameter_grid_search(base_grid, model_grids):
     results_df = pd.DataFrame(all_results)
     
     # Save results to CSV
-    results_df.to_csv('model_comparison_results.csv', index=False)
+    results_df.to_csv('SIREN_same_zeros_comparison_results.csv', index=False)
     
     return results_df
 

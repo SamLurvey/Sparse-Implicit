@@ -1,6 +1,5 @@
 import torch
 
-
 def entropy_sampling(xyz, points, nBins, npoint):
     """
     Input:

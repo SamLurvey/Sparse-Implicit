@@ -32,7 +32,7 @@ def load_first_five_data():
         full_path = os.path.join(base_path, file_path)
         if os.path.isfile(full_path) and full_path.endswith('.npy'):
             all_files.append(full_path)
-            if len(all_files) == 5:
+            if len(all_files) == 50:
                 break
 
     data_samples = [np.load(file).astype('int16') for file in all_files]

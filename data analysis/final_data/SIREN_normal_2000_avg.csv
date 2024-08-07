@@ -1,0 +1,2 @@
+lr,hidden_features,hidden_layers,max_iters,outermost_linear,hidden_omega_zero,first_omega_zero,original_mse,compression_ratio,transformed_mse,training_time,original_psnr,model,original_mse_std,training_time_std
+0.001,128,3,2000,True,45,100,316.33531799071284,22.721758502896183,0.005247857933863946,20.262681074142456,35.51212374620787,SIREN,113.33680059784801,0.007928808889369079

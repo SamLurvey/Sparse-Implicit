@@ -2,6 +2,7 @@ import torch
 import torch.nn as nn
 import numpy as np
 from torch.utils.data import Dataset, DataLoader
+from sampling import entropy_sampling
 
 class SineLayer(nn.Module):
     def __init__(self, in_features, out_features, bias=True,
@@ -28,10 +29,8 @@ class SineLayer(nn.Module):
         return torch.sin(self.omega_0 * self.linear(input))
 
 class SIRENRegressor(nn.Module):
-    def __init__(self, in_features, hidden_features, hidden_layers, out_features, outermost_linear=True):
+    def __init__(self, in_features, hidden_features, hidden_layers, out_features, outermost_linear,first_omega_0,hidden_omega_0):
         super().__init__()
-        first_omega_0 = 30
-        hidden_omega_0 = 30.
         self.net = []
         self.net.append(SineLayer(in_features, hidden_features, is_first=True, omega_0=first_omega_0))
         
@@ -79,15 +78,34 @@ class SIREN:
             hidden_features=params["hidden_features"],
             hidden_layers=params["hidden_layers"],
             out_features=params["out_features"],
-            outermost_linear=params.get("outermost_linear", True)
+            outermost_linear=params.get("outermost_linear", True),
+            first_omega_0=params["first_omega_zero"],
+            hidden_omega_0=params["hidden_omega_zero"]
         ).to(self.device)
+
+    def calculate_initial_weights(self,data):
+        data_tensor = torch.from_numpy(data).float()
+        weights = torch.where(data_tensor != 0, torch.abs(data_tensor), torch.tensor(0.1))
+        return weights / weights.sum()
+        
+    def sample_data(self,data, weights, num_samples):
+        # Flatten data and weights for sampling
+        data_flat = data.view(-1)
+        weights_flat = weights.view(-1)
     
-    def train_sparse_epoch(self, data, total_steps=1000, summary_interval=100, zero_fraction=0.1, refresh_interval=100):
+        # Sample indices based on weights
+        indices = torch.multinomial(weights_flat, num_samples, replacement=True)
+    
+        # Retrieve sampled data points
+        sampled_data = data_flat[indices]
+        return sampled_data, indices
+    
+    def train_sparse(self, data, total_steps=1000, summary_interval=100, zero_fraction=0.1, refresh_interval=100):
         array_loader = self.create_loader(data)
         grid, array = next(iter(array_loader))
         grid, array = grid.squeeze().to(self.device), array.squeeze().to(self.device)
         train_coords, train_values = grid.reshape(-1, 3), array.reshape(-1, 1)
-        
+    
         # Identify non-zero values
         non_zero_indices = train_values.nonzero(as_tuple=True)[0]
         zero_indices = (train_values == 0).nonzero(as_tuple=True)[0]
@@ -95,21 +113,19 @@ class SIREN:
         test_coords, test_values = grid.reshape(-1, 3), array.reshape(-1, 1)
         optim = torch.optim.Adam(lr=self.params["lr"], params=self.model.parameters())
 
-        sampled_indices = None
-
         for step in range(1, total_steps + 1):
             # Sample a specified percentage of zero values every refresh_interval steps
-            if step % refresh_interval == 1 or sampled_indices is None:
-                num_zeros_to_sample = int(len(zero_indices) * zero_fraction)
-                sampled_zero_indices = np.random.choice(zero_indices.cpu().numpy(), num_zeros_to_sample, replace=False)
+            num_zeros_to_sample = int(len(zero_indices) * zero_fraction)
+            sampled_zero_indices = torch.multinomial(torch.ones(len(zero_indices), device=self.device), num_zeros_to_sample, replacement=False)
+            sampled_zero_indices = zero_indices[sampled_zero_indices]
                 
-                # Combine non-zero and sampled zero indices
-                sampled_indices = torch.cat([non_zero_indices, torch.tensor(sampled_zero_indices, device=self.device)])
-            
+            # Combine non-zero and sampled zero indices
+            sampled_indices = torch.cat([non_zero_indices, sampled_zero_indices])
+        
             # Filter the training coordinates and values
             current_train_coords = train_coords[sampled_indices]
             current_train_values = train_values[sampled_indices]
-            
+        
             self.model.train()
             optim.zero_grad()
             output = self.model(current_train_coords)
@@ -126,7 +142,46 @@ class SIREN:
 
         return test_loss.item()
 
+    def train_entropy(self, data, total_steps=1000, summary_interval=100, nBins=10, sample_fraction=0.1):
+        array_loader = self.create_loader(data)
+        grid, array = next(iter(array_loader))
+        grid, array = grid.squeeze().to(self.device), array.squeeze().to(self.device)
+        train_coords, train_values = grid.reshape(-1, 3), array.reshape(-1, 1)
+        test_coords, test_values = grid.reshape(-1, 3), array.reshape(-1, 1)
 
+        optim = torch.optim.Adam(lr=self.params["lr"], params=self.model.parameters())
+
+        npoint = int(train_coords.shape[0] * sample_fraction)
+
+        for step in range(1, total_steps + 1):
+            print(step)
+            # Apply entropy sampling
+            sampled_coords, sampled_values = self.entropy_sampling(
+                train_coords.unsqueeze(0),
+                train_values.unsqueeze(0),
+                nBins,
+                npoint
+            )
+            sampled_coords = sampled_coords.squeeze(0)
+            sampled_values = sampled_values.squeeze(0)
+
+            self.model.train()
+            optim.zero_grad()
+            output = self.model(sampled_coords)
+            train_loss = torch.nn.functional.mse_loss(output, sampled_values)
+            train_loss.backward()
+            optim.step()
+
+            if not step % summary_interval:
+                self.model.eval()
+                with torch.no_grad():
+                    prediction = self.model(test_coords)
+                    test_loss = torch.nn.functional.mse_loss(prediction, test_values)
+                    print(f"Step: {step}, Test MSE: {test_loss.item():.6f}")
+
+        return test_loss.item()
+
+    
     def train(self, data, total_steps=1000, summary_interval=100):
         array_loader = self.create_loader(data)
         grid, array = next(iter(array_loader))
@@ -152,6 +207,79 @@ class SIREN:
                     print(f"Step: {step}, Test MSE: {test_loss.item():.6f}")
 
         return test_loss.item()
+
+    def train_importance(self, data, total_steps=1000, summary_interval=100, sample_fraction=0.1):
+        array_loader = self.create_loader(data)
+        grid, array = next(iter(array_loader))
+        grid, array = grid.squeeze().to(self.device), array.squeeze().to(self.device)
+        train_coords, train_values = grid.reshape(-1, 3), array.reshape(-1, 1)
+        
+        # Calculate initial weights for importance sampling
+        weights = self.calculate_initial_weights(array.cpu().numpy())
+        weights = weights.to(self.device)
+        
+        test_coords, test_values = grid.reshape(-1, 3), array.reshape(-1, 1)
+        optim = torch.optim.Adam(lr=self.params["lr"], params=self.model.parameters())
+        
+        for step in range(1, total_steps + 1):
+            # Sample data points based on importance sampling
+            num_samples = int(train_coords.shape[0] * sample_fraction)
+            _, sampled_indices = self.sample_data(train_values, weights, num_samples)
+            current_train_coords = train_coords[sampled_indices]
+            current_train_values = train_values[sampled_indices]
+
+            self.model.train()
+            optim.zero_grad()
+            output = self.model(current_train_coords)
+            train_loss = torch.nn.functional.mse_loss(output, current_train_values)
+            train_loss.backward()
+            optim.step()
+
+            if not step % summary_interval:
+                self.model.eval()
+                with torch.no_grad():
+                    prediction = self.model(test_coords)
+                    test_loss = torch.nn.functional.mse_loss(prediction, test_values)
+                    print(f"Step: {step}, Test MSE: {test_loss.item():.6f}")
+
+        return test_loss.item()
+
+    def train_random(self, data, total_steps=1000, summary_interval=100, fraction=0.1):
+
+        array_loader = self.create_loader(data)
+        grid, array = next(iter(array_loader))
+        grid, array = grid.squeeze().to(self.device), array.squeeze().to(self.device)
+        train_coords, train_values = grid.reshape(-1, 3), array.reshape(-1, 1)
+    
+        # Create uniform weights for random sampling
+        weights = torch.ones(train_values.shape[0], device=self.device)
+    
+        test_coords, test_values = grid.reshape(-1, 3), array.reshape(-1, 1)
+        optim = torch.optim.Adam(lr=self.params["lr"], params=self.model.parameters())
+    
+        for step in range(1, total_steps + 1):
+            # Sample data points based on uniform weights
+            num_samples = int(train_coords.shape[0] * fraction)
+            sampled_indices = torch.multinomial(weights, num_samples, replacement=False)
+            current_train_coords = train_coords[sampled_indices]
+            current_train_values = train_values[sampled_indices]
+
+            self.model.train()
+            optim.zero_grad()
+            output = self.model(current_train_coords)
+            train_loss = torch.nn.functional.mse_loss(output, current_train_values)
+            train_loss.backward()
+            optim.step()
+
+            if not step % summary_interval:
+                self.model.eval()
+                with torch.no_grad():
+                    prediction = self.model(test_coords)
+                    test_loss = torch.nn.functional.mse_loss(prediction, test_values)
+                    print(f"Step: {step}, Test MSE: {test_loss.item():.6f}")
+
+        return test_loss.item()
+
 
     def predict(self, coords):
         self.model.eval()
